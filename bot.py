@@ -22,34 +22,24 @@ def parse_date(s):
     except:
         return None
 
-async def scrape_with_progress(ch):
-    total_houses = count_houses()  # liczba w cache przed wczytaniem
-    progress_msg = await ch.send(f"⏳ Wczytywanie domków: 0/{total_houses}…\n[░░░░░░░░░░] 0%")
+def make_progress_bar(done, total, length=10):
+    pct = done / total if total else 0
+    filled = int(pct * length)
+    bar = "█" * filled + "░" * (length - filled)
+    return f"{bar} {int(pct*100)}% 😎"
 
-    done_counter = 0
+async def scrape_with_progress(ch):
+    total_houses = count_houses()  # jeśli cache pusty
+    progress_msg = await ch.send(f"⏳ Wczytywanie domków: 0/{total_houses}\n{make_progress_bar(0, total_houses)}")
 
     def progress_callback(done, total):
-        nonlocal done_counter
-        done_counter = done
+        bar = make_progress_bar(done, total)
+        # aktualizujemy pasek co 3 sekundy
+        bot.loop.create_task(progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total}\n{bar}"))
 
-    # Wywołanie scrapera w osobnym wątku
     await asyncio.to_thread(scrape, progress_callback)
-
-    # Aktualizacja paska co 3 sekundy
-    while done_counter < count_houses():
-        await asyncio.sleep(3)
-        current = done_counter
-        total = count_houses()
-        percent = int(current / total * 100) if total else 0
-        bars = "█" * (percent // 10) + "░" * (10 - percent // 10)
-        # szacowany czas = zakładamy że tempo stałe
-        est_time = (total - current) * 3  # w sekundach
-        mins, secs = divmod(est_time, 60)
-        await progress_msg.edit(content=f"⏳ Wczytywanie domków: {current}/{total}\n[{bars}] {percent}% ⏱ {mins}m{secs}s")
-    
-    # końcowe ustawienie
-    total = count_houses()
-    await progress_msg.edit(content=f"✅ Wczytano {total} domków\n[{'█'*10}] 100%")
+    total_houses = count_houses()
+    await progress_msg.edit(content=f"✅ Wczytano {total_houses} domków")
     await check_fast(ch)
 
 async def check_fast(ch):
@@ -80,43 +70,31 @@ async def on_ready():
     await scrape_with_progress(ch)
     monitor.start()
 
+# Komendy
 @bot.command()
 async def status(ctx):
     await ctx.send(f"🏠 W cache jest {count_houses()} domków.")
 
 @bot.command()
 async def listfast(ctx):
+    msg = "🔥 FAST domki ≥13d20h:\n"
     for h in get_all():
         dt = parse_date(h[6])
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
-            await ctx.send(
-                f"🔥 Domek offline ≥13d20h\n"
-                f"🏚️ {h[1]} ({h[2]})\n"
-                f"📐 {h[4]} sqm\n"
-                f"👤 {h[5]}\n"
-                f"🕒 {h[6]}\n"
-                f"🗺️ {h[3]}"
-            )
+            msg += f"🏚️ {h[1]} ({h[2]}) | 👤 {h[5]} | 🕒 {h[6]}\n"
+    await ctx.send(msg or "Brak FAST domków")
 
-# NOWA KOMENDA !10
 @bot.command()
 async def _10(ctx):
-    houses = []
+    fast_houses = []
     for h in get_all():
         dt = parse_date(h[6])
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
-            houses.append(h)
-    if not houses:
-        await ctx.send("Brak domków do przejęcia (≥13d20h).")
-        return
-    for h in houses[:10]:
-        await ctx.send(
-            f"🔥 Możliwy domek do przejęcia\n"
-            f"🏚️ {h[1]} ({h[2]})\n"
-            f"📐 {h[4]} sqm\n"
-            f"👤 {h[5]}\n"
-            f"🕒 {h[6]}\n"
-            f"🗺️ {h[3]}"
-        )
+            fast_houses.append(h)
+    fast_houses = sorted(fast_houses, key=lambda x: x[6])[:10]
+    msg = "🔥 Top 10 domków do przejęcia:\n"
+    for h in fast_houses:
+        msg += f"🏚️ {h[1]} ({h[2]}) | 👤 {h[5]} | 🕒 {h[6]}\n"
+    await ctx.send(msg or "Brak FAST domków")
 
 bot.run(TOKEN)
