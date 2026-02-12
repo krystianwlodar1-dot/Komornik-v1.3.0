@@ -1,67 +1,86 @@
 import requests
 from bs4 import BeautifulSoup
-from database import save_house, count_houses
-from datetime import datetime
+from database import clear, add
 
-BASE = "https://cyleria.pl"
+BASE = "https://cyleria.pl/?subtopic=houses"
 
-def get_last_login(owner_name):
-    url = f"{BASE}/?subtopic=characters&name={owner_name}"
-    html = requests.get(url).text
-    soup = BeautifulSoup(html, "lxml")
-    strong = soup.find("strong")
-    return strong.text.strip() if strong else "Unknown"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+
+def get_last_login(name):
+    url = f"https://cyleria.pl/?subtopic=characters&name={name}"
+    html = requests.get(url, headers=HEADERS, timeout=15).text
+    soup = BeautifulSoup(html, "html.parser")
+
+    for li in soup.select("li.list-group-item"):
+        if "Logowanie" in li.text:
+            return li.find("strong").text.strip()
+
+    return "None"
+
+def extract_map_and_city(span):
+    if not span:
+        return "", ""
+    data = span.get("data-bs-content", "")
+    map_url = ""
+    city = ""
+
+    if "img src='" in data:
+        map_url = data.split("img src='")[1].split("'")[0]
+    if "fw-bold" in data:
+        city = data.split("fw-bold'>")[1].split("<")[0]
+
+    return map_url, city
+
+def get_total_pages(html):
+    soup = BeautifulSoup(html, "html.parser")
+    pages = []
+    for b in soup.select("ul.pagination button.page-link"):
+        if b.text.isdigit():
+            pages.append(int(b.text))
+    return max(pages) if pages else 1
 
 def scrape(progress_callback=None):
-    html = requests.get(f"{BASE}/?subtopic=houses").text
-    soup = BeautifulSoup(html, "lxml")
-    rows = soup.select("table tr")[1:]  # pomijamy nagłówek
+    clear()
 
-    total = len(rows)
+    # Strona 1 żeby sprawdzić ile jest stron
+    html = requests.get(BASE, headers=HEADERS, timeout=20).text
+    total_pages = get_total_pages(html)
 
-    for i, r in enumerate(rows, start=1):
-        tds = r.find_all("td")
+    all_rows = []
+
+    for page in range(total_pages):
+        url = BASE + f"&page={page}"
+        html = requests.get(url, headers=HEADERS, timeout=20).text
+        soup = BeautifulSoup(html, "html.parser")
+
+        rows = soup.select("tbody.text-start tr")
+        all_rows.extend(rows)
+
+    total = len(all_rows)
+    done = 0
+
+    for row in all_rows:
+        tds = row.find_all("td")
         if len(tds) < 3:
             continue
 
-        address = tds[0].text.strip()
+        addr_td = tds[0]
+        address = addr_td.contents[0].strip()
 
-        pop = tds[0].find("span")
-        map_img = None
-        city = None
-        house_id = None
+        span = addr_td.find("span")
+        map_url, city = extract_map_and_city(span)
 
-        if pop:
-            sub = BeautifulSoup(pop.get("data-bs-content",""), "lxml")
-            img = sub.find("img")
-            div = sub.find("div", class_="mt-2")
-            if img and div:
-                map_img = img.get("src")
-                city = div.text.strip()
-                try:
-                    house_id = int(map_img.split("/")[-1].replace(".png", ""))
-                except:
-                    house_id = i  # fallback jeśli ID nie jest liczbą
+        size = int(tds[1].text.strip())
 
-        try:
-            size = int(tds[1].text.strip())
-        except:
-            size = 0
-        owner = tds[2].text.strip()
-        last_login = get_last_login(owner) if owner.lower() != "none" else "None"
+        owner_tag = tds[2].find("a")
+        owner = owner_tag.text.strip() if owner_tag else "None"
 
-        if house_id and address:
-            save_house({
-                "house_id": house_id,
-                "address": address,
-                "city": city,
-                "map_image": map_img,
-                "size": size,
-                "owner": owner,
-                "last_login": last_login,
-                "last_seen": datetime.utcnow().isoformat()
-            })
+        last_login = get_last_login(owner) if owner != "None" else "None"
 
+        add(address, city, map_url, size, owner, last_login)
+
+        done += 1
         if progress_callback:
-            done = count_houses()  # licznik oparty na faktycznej bazie
             progress_callback(done, total)
