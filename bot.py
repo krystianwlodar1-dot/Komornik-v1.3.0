@@ -30,20 +30,34 @@ def progress_bar(done, total, length=10):
 
 async def scrape_with_progress(ch):
     progress_msg = await ch.send("⏳ Wczytywanie domków: 0/…")
+    start_time = datetime.utcnow()
+    progress_data = {"done": 0, "total": 0, "finished": False}
 
-    start = datetime.utcnow()
-
+    # Funkcja callback dla scrapera
     def progress_callback(done, total):
-        elapsed = (datetime.utcnow() - start).total_seconds()
-        rate = done / elapsed if elapsed > 0 else 0
-        remaining = int((total - done) / rate) if rate > 0 else 0
-        eta = str(timedelta(seconds=remaining)).split(".")[0]
-        bar = progress_bar(done, total)
-        bot.loop.create_task(progress_msg.edit(
-            content=f"⏳ Wczytywanie domków: {done}/{total} | ETA: {eta}\n{bar}"
-        ))
+        progress_data["done"] = done
+        progress_data["total"] = total
 
+    # Task do aktualizacji paska co 3 sekundy
+    async def update_progress():
+        while not progress_data["finished"]:
+            done = progress_data["done"]
+            total = progress_data["total"]
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+            rate = done / elapsed if elapsed > 0 else 0
+            remaining = int((total - done) / rate) if rate > 0 else 0
+            eta = str(timedelta(seconds=remaining)).split(".")[0]
+            bar = progress_bar(done, total)
+            await progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total} | ETA: {eta}\n{bar}")
+            await asyncio.sleep(3)  # aktualizacja co 3 sekundy
+
+    # Uruchom task aktualizacji i scrapowanie w tle
+    updater_task = asyncio.create_task(update_progress())
     await asyncio.to_thread(scrape, progress_callback)
+    progress_data["finished"] = True
+    await updater_task
+
+    # Końcowy komunikat
     await progress_msg.edit(content=f"✅ Wczytano {count_houses()} domków")
     await check_fast(ch)
 
