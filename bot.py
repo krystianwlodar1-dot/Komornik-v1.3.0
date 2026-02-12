@@ -33,12 +33,11 @@ async def scrape_with_progress(ch):
     start_time = datetime.utcnow()
     progress_data = {"done": 0, "total": 0, "finished": False}
 
-    # Funkcja callback dla scrapera
+    # Callback wywoływany w scraperze przy każdym domu/stronie
     def progress_callback(done, total):
         progress_data["done"] = done
         progress_data["total"] = total
 
-    # Task do aktualizacji paska co 3 sekundy
     async def update_progress():
         while not progress_data["finished"]:
             done = progress_data["done"]
@@ -49,15 +48,12 @@ async def scrape_with_progress(ch):
             eta = str(timedelta(seconds=remaining)).split(".")[0]
             bar = progress_bar(done, total)
             await progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total} | ETA: {eta}\n{bar}")
-            await asyncio.sleep(3)  # aktualizacja co 3 sekundy
+            await asyncio.sleep(3)
 
-    # Uruchom task aktualizacji i scrapowanie w tle
     updater_task = asyncio.create_task(update_progress())
     await asyncio.to_thread(scrape, progress_callback)
     progress_data["finished"] = True
     await updater_task
-
-    # Końcowy komunikat
     await progress_msg.edit(content=f"✅ Wczytano {count_houses()} domków")
     await check_fast(ch)
 
@@ -109,7 +105,6 @@ async def listfast(ctx):
 
 @bot.command()
 async def _10(ctx):
-    """!10 — pokaż 10 domków do przejęcia (≥13d20h)"""
     candidates = []
     for h in get_all():
         dt = parse_date(h[5])
