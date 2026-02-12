@@ -1,86 +1,46 @@
 import requests
 from bs4 import BeautifulSoup
 from database import clear, add
+import time
 
-BASE = "https://cyleria.pl/?subtopic=houses"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
-
-def get_last_login(name):
-    url = f"https://cyleria.pl/?subtopic=characters&name={name}"
-    html = requests.get(url, headers=HEADERS, timeout=15).text
-    soup = BeautifulSoup(html, "html.parser")
-
-    for li in soup.select("li.list-group-item"):
-        if "Logowanie" in li.text:
-            return li.find("strong").text.strip()
-
-    return "None"
-
-def extract_map_and_city(span):
-    if not span:
-        return "", ""
-    data = span.get("data-bs-content", "")
-    map_url = ""
-    city = ""
-
-    if "img src='" in data:
-        map_url = data.split("img src='")[1].split("'")[0]
-    if "fw-bold" in data:
-        city = data.split("fw-bold'>")[1].split("<")[0]
-
-    return map_url, city
-
-def get_total_pages(html):
-    soup = BeautifulSoup(html, "html.parser")
-    pages = []
-    for b in soup.select("ul.pagination button.page-link"):
-        if b.text.isdigit():
-            pages.append(int(b.text))
-    return max(pages) if pages else 1
+BASE_URL = "https://cyleria.pl/?subtopic=houses"
 
 def scrape(progress_callback=None):
     clear()
+    session = requests.Session()
+    page = 1
+    total_houses = 0
 
-    # Strona 1 żeby sprawdzić ile jest stron
-    html = requests.get(BASE, headers=HEADERS, timeout=20).text
-    total_pages = get_total_pages(html)
-
-    all_rows = []
-
-    for page in range(total_pages):
-        url = BASE + f"&page={page}"
-        html = requests.get(url, headers=HEADERS, timeout=20).text
-        soup = BeautifulSoup(html, "html.parser")
+    while True:
+        r = session.get(BASE_URL + f"&page={page}")
+        soup = BeautifulSoup(r.text, "html.parser")
 
         rows = soup.select("tbody.text-start tr")
-        all_rows.extend(rows)
+        if not rows:
+            break
 
-    total = len(all_rows)
-    done = 0
+        for i, row in enumerate(rows, start=1):
+            name = row.select_one("td.text-center").get_text(strip=True)
+            map_url = row.select_one("span[data-bs-content]")["data-bs-content"]
+            size = int(row.select_one("td.dt-type-numeric").text.strip())
+            owner = row.select_one("td.text-center a").text.strip()
+            # Na razie dummy last login, później możesz pobrać ze strony postaci
+            last_login = "01.01.2000 (00:00)"  
 
-    for row in all_rows:
-        tds = row.find_all("td")
-        if len(tds) < 3:
-            continue
+            add({
+                "name": name,
+                "map_url": map_url,
+                "size": size,
+                "owner": owner,
+                "last_login": last_login
+            })
+            total_houses += 1
+            if progress_callback:
+                progress_callback(total_houses, total_houses + 1)  # ETA dummy
 
-        addr_td = tds[0]
-        address = addr_td.contents[0].strip()
-
-        span = addr_td.find("span")
-        map_url, city = extract_map_and_city(span)
-
-        size = int(tds[1].text.strip())
-
-        owner_tag = tds[2].find("a")
-        owner = owner_tag.text.strip() if owner_tag else "None"
-
-        last_login = get_last_login(owner) if owner != "None" else "None"
-
-        add(address, city, map_url, size, owner, last_login)
-
-        done += 1
-        if progress_callback:
-            progress_callback(done, total)
+        # sprawdź paginację
+        next_button = soup.select_one("ul.pagination li.next")
+        if not next_button or "disabled" in next_button.get("class", []):
+            break
+        page += 1
+        time.sleep(1)  # unikamy rate limit
