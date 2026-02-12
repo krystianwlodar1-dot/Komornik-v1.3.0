@@ -22,44 +22,26 @@ def parse_date(s):
     except:
         return None
 
-def progress_bar(done, total, length=10):
-    perc = done / total if total else 0
-    filled = int(length * perc)
-    bar = "█" * filled + "░" * (length - filled)
-    return f"{bar} {int(perc*100)}% 😎"
+def format_progress(done, total):
+    percent = int(done / total * 100) if total else 0
+    blocks = int(percent / 10)
+    bar = "█" * blocks + "░" * (10 - blocks)
+    return f"{bar} {percent}% 😎"
 
 async def scrape_with_progress(ch):
     progress_msg = await ch.send("⏳ Wczytywanie domków: 0/…")
-    start_time = datetime.utcnow()
-    progress_data = {"done": 0, "total": 0, "finished": False}
 
-    # Callback wywoływany w scraperze przy każdym domu/stronie
     def progress_callback(done, total):
-        progress_data["done"] = done
-        progress_data["total"] = total
+        content = f"⏳ Wczytywanie domków: {done}/{total}\n" + format_progress(done, total)
+        bot.loop.create_task(progress_msg.edit(content=content))
 
-    async def update_progress():
-        while not progress_data["finished"]:
-            done = progress_data["done"]
-            total = progress_data["total"]
-            elapsed = (datetime.utcnow() - start_time).total_seconds()
-            rate = done / elapsed if elapsed > 0 else 0
-            remaining = int((total - done) / rate) if rate > 0 else 0
-            eta = str(timedelta(seconds=remaining)).split(".")[0]
-            bar = progress_bar(done, total)
-            await progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total} | ETA: {eta}\n{bar}")
-            await asyncio.sleep(3)
-
-    updater_task = asyncio.create_task(update_progress())
     await asyncio.to_thread(scrape, progress_callback)
-    progress_data["finished"] = True
-    await updater_task
     await progress_msg.edit(content=f"✅ Wczytano {count_houses()} domków")
     await check_fast(ch)
 
 async def check_fast(ch):
     for h in get_all():
-        dt = parse_date(h[5])
+        dt = parse_date(h[6]) if h[6] else None
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
             if h[0] not in alerted_houses:
                 alerted_houses.add(h[0])
@@ -68,7 +50,7 @@ async def check_fast(ch):
                     f"🏚️ {h[1]} ({h[2]})\n"
                     f"📐 {h[4]} sqm\n"
                     f"👤 {h[3]}\n"
-                    f"🕒 {h[5]}\n"
+                    f"🕒 {h[6]}\n"
                     f"🗺️ {h[2]}"
                 )
 
@@ -92,32 +74,34 @@ async def status(ctx):
 @bot.command()
 async def listfast(ctx):
     for h in get_all():
-        dt = parse_date(h[5])
+        dt = parse_date(h[6]) if h[6] else None
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
             await ctx.send(
                 f"🔥 Domek offline ≥13d20h\n"
                 f"🏚️ {h[1]} ({h[2]})\n"
                 f"📐 {h[4]} sqm\n"
                 f"👤 {h[3]}\n"
-                f"🕒 {h[5]}\n"
+                f"🕒 {h[6]}\n"
                 f"🗺️ {h[2]}"
             )
 
 @bot.command()
 async def _10(ctx):
-    candidates = []
+    """Pokazuje 10 pierwszych domków do przejęcia (FAST)"""
+    sent = 0
     for h in get_all():
-        dt = parse_date(h[5])
+        dt = parse_date(h[6]) if h[6] else None
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
-            candidates.append(h)
-    for h in candidates[:10]:
-        await ctx.send(
-            f"🔥 Domek offline ≥13d20h\n"
-            f"🏚️ {h[1]} ({h[2]})\n"
-            f"📐 {h[4]} sqm\n"
-            f"👤 {h[3]}\n"
-            f"🕒 {h[5]}\n"
-            f"🗺️ {h[2]}"
-        )
+            await ctx.send(
+                f"🔥 Domek offline ≥13d20h\n"
+                f"🏚️ {h[1]} ({h[2]})\n"
+                f"📐 {h[4]} sqm\n"
+                f"👤 {h[3]}\n"
+                f"🕒 {h[6]}\n"
+                f"🗺️ {h[2]}"
+            )
+            sent += 1
+            if sent >= 10:
+                break
 
 bot.run(TOKEN)
