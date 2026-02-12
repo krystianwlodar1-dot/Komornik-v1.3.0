@@ -3,8 +3,7 @@ from discord.ext import commands, tasks
 from scraper import scrape
 from database import get_all, count_houses
 from datetime import datetime, timedelta
-import os
-import asyncio
+import os, asyncio, time
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL = int(os.getenv("CHANNEL_ID"))
@@ -14,7 +13,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 FAST_THRESHOLD = timedelta(days=13, hours=20)
-alerted_houses = set()
+alerted = set()
 
 def parse_date(s):
     try:
@@ -23,21 +22,28 @@ def parse_date(s):
         return None
 
 async def scrape_with_progress(ch):
-    progress_msg = await ch.send("⏳ Wczytywanie domków: 0/…")
+    msg = await ch.send("⏳ Wczytywanie domków: 0/…")
+    last_update = 0
 
-    def progress_callback(done, total):
-        bot.loop.create_task(progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total}"))
+    def progress(done, total):
+        nonlocal last_update
+        now = time.time()
+        if now - last_update > 3 or done == total:
+            last_update = now
+            bot.loop.create_task(
+                msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total}")
+            )
 
-    await asyncio.to_thread(scrape, progress_callback)
-    await progress_msg.edit(content=f"✅ Wczytano {count_houses()} domków")
+    await asyncio.to_thread(scrape, progress)
+    await msg.edit(content=f"✅ Wczytano {count_houses()} domków")
     await check_fast(ch)
 
 async def check_fast(ch):
     for h in get_all():
         dt = parse_date(h[6])
         if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
-            if h[0] not in alerted_houses:
-                alerted_houses.add(h[0])
+            if h[0] not in alerted:
+                alerted.add(h[0])
                 await ch.send(
                     f"🔥 **FAST ALERT**\n"
                     f"🏚️ {h[1]} ({h[2]})\n"
