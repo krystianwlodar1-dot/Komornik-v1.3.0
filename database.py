@@ -1,51 +1,43 @@
 import sqlite3
+from datetime import datetime
 
 DB_FILE = "houses.db"
 
-def connect():
-    return sqlite3.connect(DB_FILE)
+conn = sqlite3.connect(DB_FILE)
+c = conn.cursor()
 
-def create_table():
-    with connect() as conn:
-        c = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS houses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                address TEXT,
-                map_url TEXT,
-                owner TEXT,
-                size INTEGER,
-                status TEXT,
-                last_login TEXT
-            )
-        """)
-        conn.commit()
-
-def clear():
-    with connect() as conn:
-        c = conn.cursor()
-        c.execute("DELETE FROM houses")
-        conn.commit()
+# Tworzenie tabeli jeśli nie istnieje
+c.execute("""
+CREATE TABLE IF NOT EXISTS houses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    map_url TEXT,
+    owner TEXT,
+    size INTEGER,
+    status TEXT,
+    last_login TEXT
+)
+""")
+conn.commit()
 
 def add(house):
-    with connect() as conn:
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO houses (address, map_url, owner, size, status, last_login)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, house)
-        conn.commit()
+    """Dodaje domek do bazy"""
+    c.execute("""
+    INSERT INTO houses (name, map_url, owner, size, status, last_login)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (house[1], house[2], house[3], house[4], house[5], house[6] if len(house) > 6 else None))
+    conn.commit()
 
 def get_all():
-    with connect() as conn:
-        c = conn.cursor()
-        c.execute("SELECT * FROM houses")
-        return c.fetchall()
+    """Zwraca wszystkie domki"""
+    c.execute("SELECT * FROM houses")
+    return c.fetchall()
+
+def clear():
+    """Czyści tabelę domków"""
+    c.execute("DELETE FROM houses")
+    conn.commit()
 
 def count_houses():
-    with connect() as conn:
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM houses")
-        return c.fetchone()[0]
-
-create_table()
+    c.execute("SELECT COUNT(*) FROM houses")
+    return c.fetchone()[0]
