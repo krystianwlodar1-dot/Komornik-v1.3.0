@@ -1,56 +1,51 @@
 import sqlite3
-import os
 
 DB_FILE = "houses.db"
 
-# Tworzenie tabeli jeśli nie istnieje
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS houses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            map_url TEXT,
-            size INTEGER,
-            owner TEXT,
-            last_login TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+def connect():
+    return sqlite3.connect(DB_FILE)
 
-init_db()
+def create_table():
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS houses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT,
+                map_url TEXT,
+                owner TEXT,
+                size INTEGER,
+                status TEXT,
+                last_login TEXT
+            )
+        """)
+        conn.commit()
 
 def clear():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM houses")
-    conn.commit()
-    conn.close()
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM houses")
+        conn.commit()
 
 def add(house):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO houses (name, map_url, size, owner, last_login)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (house["name"], house["map_url"], house["size"], house["owner"], house["last_login"]))
-    conn.commit()
-    conn.close()
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO houses (address, map_url, owner, size, status, last_login)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, house)
+        conn.commit()
 
 def get_all():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, name, map_url, size, owner, last_login FROM houses")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM houses")
+        return c.fetchall()
 
 def count_houses():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM houses")
-    n = c.fetchone()[0]
-    conn.close()
-    return n
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM houses")
+        return c.fetchone()[0]
+
+create_table()
