@@ -1,196 +1,124 @@
-import os
 import discord
-import requests
+from discord.ext import commands, tasks
+from scraper import scrape
+from database import get_all, count_houses
+from datetime import datetime, timedelta
+import os
 import asyncio
-import json
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 
-# ------------------- Zmienne środowiskowe -------------------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-
-URL = "https://cyleria.pl/?subtopic=killstatistics"
-DATA_FILE = "watched.json"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (CyleriaBot; Discord death tracker)"
-}
+TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL = int(os.getenv("CHANNEL_ID"))
 
 intents = discord.Intents.default()
 intents.message_content = True
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-last_seen = set()
+FAST_THRESHOLD = timedelta(days=13, hours=20)
+alerted_houses = set()
 
-# ------------------- Utils -------------------
-def make_char_link(name):
-    encoded = quote_plus(name)
-    return f"[{name}](<https://cyleria.pl/?subtopic=characters&name={encoded}>)"
-
-def split_killers(killer_str):
-    killer_str = killer_str.replace(" oraz ", ",")
-    return [k.strip() for k in killer_str.split(",") if k.strip()]
-
-# ------------------- Persistencja -------------------
-def load_watched():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except:
-            print("Błąd wczytywania watched.json")
-
-    return {
-        "Agnieszka",
-        "Miekka Parowka",
-        "Gazowany Kompot",
-        "Tapczan'ed",
-        "Negocjator",
-        "Astma",
-        "Mistrz Negocjacji",
-        "Jestem Karma",
-        "Pan Trezer",
-        "Negocjatorka"
-    }
-
-def save_watched():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(WATCHED), f, ensure_ascii=False, indent=2)
-
-WATCHED = load_watched()
-
-# ------------------- Cyleria -------------------
-def is_player(killer):
-    killer = killer.lower().strip()
-    return not killer.startswith(("a ", "an ", "the "))
-
-def get_deaths():
+# pomocnicze
+def parse_date(s):
     try:
-        r = requests.get(URL, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return []
+        return datetime.strptime(s, "%d.%m.%Y (%H:%M)")
+    except:
+        return None
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        tbody = soup.find("tbody")
-        if not tbody:
-            return []
+def make_progress_bar(done, total, length=20):
+    pct = int(done / total * 100)
+    filled = int(length * done / total)
+    bar = "█" * filled + "░" * (length - filled)
+    return f"{bar} {pct}% 😎"
 
-        deaths = []
-        for tr in tbody.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
+# progres
+async def scrape_with_progress(ch):
+    total_houses = count_houses() or 1
+    progress_msg = await ch.send(f"⏳ Wczytywanie domków: 0/{total_houses}\n{make_progress_bar(0, total_houses)}")
 
-            time = tds[0].get_text(strip=True)
-            text = tds[1].get_text(" ", strip=True)
+    progress = {"done": 0}
 
-            if "śmierć na poziomie" in text:
-                parts = text.split("śmierć na poziomie")
-                name = parts[0].strip()
-                rest = parts[1].strip()
-                if "przez" in rest:
-                    level, killer = rest.split("przez", 1)
-                else:
-                    level, killer = rest, "Nieznany"
-            else:
-                name = text.split("przez")[0].strip()
-                level = "?"
-                killer = text.split("przez")[1].strip() if "przez" in text else "Nieznany"
+    def progress_callback(done, total):
+        progress["done"] = done
 
-            if name not in WATCHED:
-                continue
+    scrape_task = asyncio.to_thread(scrape, progress_callback)
 
-            key = time + text
-            deaths.append((key, time, name, level.strip(), killer.strip()))
+    while not scrape_task.done():
+        done = progress["done"]
+        total = count_houses() or 1
+        bar = make_progress_bar(done, total)
+        await progress_msg.edit(content=f"⏳ Wczytywanie domków: {done}/{total}\n{bar}")
+        await asyncio.sleep(3)
 
-        return deaths
+    await scrape_task
+    total_houses = count_houses()
+    bar = make_progress_bar(total_houses, total_houses)
+    await progress_msg.edit(content=f"✅ Wczytano {total_houses} domków\n{bar}")
+    await check_fast(ch)
 
-    except Exception as e:
-        print("Cyleria error:", e)
-        return []
+# sprawdzanie FAST
+async def check_fast(ch):
+    for h in get_all():
+        dt = parse_date(h[6])
+        if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
+            if h[0] not in alerted_houses:
+                alerted_houses.add(h[0])
+                await ch.send(
+                    f"🔥 **FAST ALERT**\n"
+                    f"🏚️ {h[1]} ({h[2]})\n"
+                    f"📐 {h[4]} sqm\n"
+                    f"👤 {h[5]}\n"
+                    f"🕒 {h[6]}\n"
+                    f"🗺️ {h[3]}"
+                )
 
-# ------------------- Loop -------------------
-async def check_loop():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
+# monitor co 15 minut
+@tasks.loop(minutes=15)
+async def monitor():
+    ch = bot.get_channel(CHANNEL)
+    await asyncio.to_thread(scrape)
+    await check_fast(ch)
 
-    for key, *_ in get_deaths():
-        last_seen.add(key)
+@bot.event
+async def on_ready():
+    print("Komornik online")
+    ch = bot.get_channel(CHANNEL)
+    await scrape_with_progress(ch)
+    monitor.start()
 
-    while True:
-        try:
-            for key, time, name, level, killer in reversed(get_deaths()):
-                if key in last_seen:
-                    continue
+# komendy
+@bot.command()
+async def status(ctx):
+    await ctx.send(f"🏠 W cache jest {count_houses()} domków.")
 
-                victim = make_char_link(name)
-                msg = f"🕒 {time}\nZginął 🟢 **{victim}** na poziomie {level} przez "
+@bot.command()
+async def listfast(ctx):
+    for h in get_all():
+        dt = parse_date(h[6])
+        if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
+            await ctx.send(
+                f"🔥 Domek offline ≥13d20h\n"
+                f"🏚️ {h[1]} ({h[2]})\n"
+                f"📐 {h[4]} sqm\n"
+                f"👤 {h[5]}\n"
+                f"🕒 {h[6]}\n"
+                f"🗺️ {h[3]}"
+            )
 
-                if is_player(killer):
-                    killers = split_killers(killer)
-                    killer_links = [make_char_link(k) for k in killers]
-                    msg += "🔴 **" + " , ".join(killer_links) + "**"
-                else:
-                    msg += killer
-
-                await channel.send(msg)
-                last_seen.add(key)
-
-            if len(last_seen) > 300:
-                last_seen.clear()
-
-        except Exception as e:
-            print("Loop error:", e)
-
-        await asyncio.sleep(30)
-
-# ------------------- Komendy -------------------
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
-
-    if message.content.startswith("!dodaj"):
-        try:
-            nick = message.content.split('"')[1]
-            WATCHED.add(nick)
-            save_watched()
-            await message.channel.send(f"✅ Dodano **{nick}**")
-        except:
-            await message.channel.send("Użycie: `!dodaj \"Nick\"`")
-
-    elif message.content.startswith("!usun"):
-        try:
-            nick = message.content.split('"')[1]
-            WATCHED.discard(nick)
-            save_watched()
-            await message.channel.send(f"✅ Usunięto **{nick}**")
-        except:
-            await message.channel.send("Użycie: `!usun \"Nick\"`")
-
-    elif message.content.startswith("!lista"):
-        if not WATCHED:
-            await message.channel.send("Lista jest pusta ❌")
-        else:
-            lista = "\n".join(f"🟢 {n}" for n in sorted(WATCHED))
-            await message.channel.send(f"**Śledzone postacie:**\n{lista}")
-
-    elif message.content.startswith("!info"):
-        await message.channel.send(
-            "**Komendy:**\n"
-            "`!dodaj \"Nick\"` – dodaje postać\n"
-            "`!usun \"Nick\"` – usuwa postać\n"
-            "`!lista` – lista śledzonych\n"
-            "`!info` – pomoc"
+@bot.command()
+async def _10(ctx):
+    houses = []
+    for h in get_all():
+        dt = parse_date(h[6])
+        if dt and datetime.utcnow() - dt >= FAST_THRESHOLD:
+            houses.append(h)
+    houses = sorted(houses, key=lambda x: parse_date(x[6]))
+    for h in houses[:10]:
+        await ctx.send(
+            f"🔥 Domek offline ≥13d20h\n"
+            f"🏚️ {h[1]} ({h[2]})\n"
+            f"📐 {h[4]} sqm\n"
+            f"👤 {h[5]}\n"
+            f"🕒 {h[6]}\n"
+            f"🗺️ {h[3]}"
         )
 
-# ------------------- Ready -------------------
-@client.event
-async def on_ready():
-    print("Zalogowany jako", client.user)
-    channel = client.get_channel(CHANNEL_ID)
-    await channel.send("**Zgony v1.3.0** uruchomione ✅")
-    client.loop.create_task(check_loop())
-
-client.run(DISCORD_TOKEN)
+bot.run(TOKEN)
